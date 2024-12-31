@@ -636,7 +636,7 @@ contract User is Logger, IDelegationManagerTypes, IAllocationManagerTypes {
 
         expectedWithdrawals = new Withdrawal[](strategies.length);
 
-        (uint256[] memory withdrawableShares,)
+        (uint256[] memory withdrawableShares, uint256[] memory depositShares)
              = delegationManager.getWithdrawableShares(staker, strategies);
 
         address delegatedTo = delegationManager.delegatedTo(staker);
@@ -647,7 +647,7 @@ contract User is Logger, IDelegationManagerTypes, IAllocationManagerTypes {
                 delegationManager.depositScalingFactor(staker, strategies[i])
             );
 
-            uint256 scaledShares = dsf.scaleForQueueWithdrawal(withdrawableShares[i]);
+            uint256 scaledShares = dsf.scaleForQueueWithdrawal(depositShares[i]);
 
             if (strategies[i] == beaconChainETHStrategy) {
                 scaledShares -= scaledShares % 1 gwei;
