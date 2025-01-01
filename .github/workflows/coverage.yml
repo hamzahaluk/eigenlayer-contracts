@@ -2,71 +2,90 @@ name: Run Coverage
 
 on:
   push:
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-
   run-coverage:
-    needs: prepare
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
 
     steps:
-    - name: Load issue number
-      uses: actions/github-script@v6
+    - name: Checkout Code
+      uses: actions/checkout@v2
+
+    - name: Load Issue Number
       id: get_issue_number
+      uses: actions/github-script@v6
       with:
         script: |
-          if (context.issue && context.issue.number) {
-            // Return issue number if present
-            return context.issue.number;
-          } else {
-            // Otherwise return issue number from commit
-            return (
-              await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                commit_sha: context.sha,
+          try {
+            if (context.issue && context.issue.number) {
+              return context.issue.number;
+            } else {
+              const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-              })
-            ).data[0].number;
+                commit_sha: context.sha,
+              });
+              if (prs.data.length > 0) {
+                return prs.data[0].number;
+              } else {
+                return null;
+              }
+            }
+          } catch (error) {
+            core.setFailed(`Failed to fetch issue number: ${error.message}`);
           }
         result-encoding: string
-    - name: Checkout code
-      uses: actions/checkout@v2
+
     - name: Install lcov
       run: |
-        sudo apt-get install lcov
-      id: lcov
+        sudo apt-get update
+        sudo apt-get install -y lcov
+
     - name: Install Foundry
       uses: foundry-rs/foundry-toolchain@v1
       with:
         version: nightly
-    - name: Run coverage
+
+    - name: Run Coverage
       run: forge coverage --report lcov
-    - name: Prune coverage report
-      run: lcov --remove ./lcov.info -o ./lcov.info.pruned 'src/test/*' 'script/*' '*Storage.sol' --ignore-errors inconsistent
-    - name: Generate reports
+
+    - name: Prune Coverage Report
+      run: |
+        lcov --remove ./lcov.info -o ./lcov.info.pruned \
+          'src/test/*' 'script/*' '*Storage.sol' --ignore-errors inconsistent
+
+    - name: Generate HTML Report
       run: genhtml -o report ./lcov.info.pruned
-    - name: Upload coverage results (s3 link here)
+
+    - name: Upload Coverage Report
       uses: actions/upload-artifact@v4
       with:
         name: code-coverage-report
         path: report/*
-    - name: View Coverage (text here)
-      id: print_coverage
+
+    - name: Generate Text Coverage Report
+      id: coverage_text
       run: |
-        EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-        echo "comment_contents<<$EOF" >> $GITHUB_OUTPUT
-        echo "$(lcov --list ./lcov.info.pruned --ignore-errors inconsistent)" >> $GITHUB_OUTPUT
-        echo "$EOF" >> $GITHUB_OUTPUT
-    - name: Log Coverage Report
-      run: echo "${{ steps.print_coverage.outputs.comment_contents }}"
+        echo "$(lcov --list ./lcov.info.pruned --ignore-errors inconsistent)" > coverage_text.txt
+        cat coverage_text.txt
+
+    - name: Post Coverage Report as Comment
+      if: success()
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issueNumber = ${{ steps.get_issue_number.outputs.result }};
+          if (!issueNumber) {
+            console.log("No associated issue or PR found for this commit.");
+            return;
+          }
+          const coverageReport = require('fs').readFileSync('coverage_text.txt', 'utf8');
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: issueNumber,
+            body: `### Code Coverage Report\n\n\`\`\`\n${coverageReport}\n\`\`\``,
+          });
